@@ -168,3 +168,21 @@ fn draw_qr_code(qr: &bardecoder::util::qr::QRData) -> image::DynamicImage {
         .unwrap();
     DynamicImage::from(img)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_rqrr() {
+        // Downsampling required; otherwise bardecoder gets confused by the light grey pixels
+        // added to the background. It's like this QR code encoder is trying as hard as possible
+        // to make codes that are hard to read :(
+        let img_data = include_bytes!("testdata/Screenshot_20251018-135642.small.png");
+        let img = image::load_from_memory(img_data).unwrap().into_rgba8();
+        let result = qr_decode(0, img);
+        assert_eq!(
+            result,
+            Some("WIFI:S:Not a real network;T:SAE;P:password;H:false;;".into())
+        );
+    }
+}
