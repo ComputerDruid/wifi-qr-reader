@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use bardecoder::{decode::Decode, detect::Detect, extract::Extract, prepare::Prepare};
+use bardecoder::{detect::Detect, extract::Extract, prepare::Prepare};
 use image::DynamicImage;
 
 #[allow(clippy::type_complexity, reason = "this is as clear as I can make it")]
@@ -11,17 +11,17 @@ pub(crate) fn qr_decode_thread(
     )>,
 ) -> String {
     {
-        let mut bardecoder_time = Duration::ZERO;
+        let mut decoding_time = Duration::ZERO;
 
         loop {
             let (frame_id, rgba_img) = next_image.recv();
             let bardecoder_start = Instant::now();
             eprintln!("searching for barcode in frame {frame_id}");
             let decoded = qr_decode(frame_id, rgba_img);
-            bardecoder_time += bardecoder_start.elapsed();
+            decoding_time += bardecoder_start.elapsed();
             if let Some(decoded) = decoded {
                 if decoded.starts_with("WIFI:") {
-                    dbg!(bardecoder_time);
+                    dbg!(decoding_time);
                     eprintln!("[{frame_id}] found code {decoded:?}");
                     return decoded;
                 } else {
@@ -43,7 +43,6 @@ fn qr_decode(frame_id: i32, image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>)
     let detect = bardecoder::detect::LineScan::new();
     let detected = detect.detect(&prepared);
     let extract = bardecoder::extract::QRExtractor::new();
-    let decode = bardecoder::decode::QRDecoder::new();
     for loc in detected {
         match loc {
             bardecoder::detect::Location::QR(qrloc) => {
@@ -55,59 +54,47 @@ fn qr_decode(frame_id: i32, image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>)
                     }
                 };
                 let side = extracted.side;
+                let grid = rqrr::SimpleGrid::from_func(side as usize, |x, y| {
+                    extracted.data[y * (side as usize) + x] == 0
+                });
+                let grid = rqrr::Grid::new(grid);
 
-                match decode.decode(Ok(bardecoder::util::qr::QRData {
-                    data: extracted.data.clone(),
-                    version: extracted.version,
-                    side: extracted.side,
-                })) {
-                    Ok(decoded) => return Some(decoded),
+                match grid.decode() {
+                    Ok((_meta, content)) => {
+                        eprintln!("[{frame_id}] rqrr found code {content:?}");
+                        let qr_img = draw_qr_code(&extracted);
+                        // qr_img.write_to(
+                        //     &mut std::fs::OpenOptions::new()
+                        //         .create(true)
+                        //         .write(true)
+                        //         .open(format!("/tmp/qr/{frame_id}.png"))
+                        //         .unwrap(),
+                        //     image::ImageFormat::Png,
+                        // )
+                        // .unwrap();
+                        let qr_img = qr_img.into_rgb8();
+                        dbg!(qr_img.width(), qr_img.height());
+                        let sixel_data = icy_sixel::sixel_string(
+                            qr_img.as_raw(),
+                            qr_img.width() as i32,
+                            qr_img.height() as i32,
+                            icy_sixel::PixelFormat::RGB888,
+                            icy_sixel::DiffusionMethod::Auto, // Auto, None, Atkinson, FS, JaJuNi, Stucki, Burkes, ADither, XDither
+                            icy_sixel::MethodForLargest::Auto, // Auto, Norm, Lum
+                            icy_sixel::MethodForRep::Auto, // Auto, CenterBox, AverageColors, Pixels
+                            icy_sixel::Quality::HIGH,      // AUTO, HIGH, LOW, FULL, HIGHCOLOR
+                        )
+                        .expect("Failed to encode image to SIXEL format");
+                        eprintln!("{sixel_data}");
+
+                        return Some(content);
+                    }
                     Err(err) => {
-                        eprintln!("[{frame_id}] bardecoder decode error {err:?}");
-
-                        let grid = rqrr::SimpleGrid::from_func(side as usize, |x, y| {
-                            extracted.data[y * (side as usize) + x] == 0
-                        });
-                        let grid = rqrr::Grid::new(grid);
-
-                        match grid.decode() {
-                            Ok((_meta, content)) => {
-                                eprintln!("[{frame_id}] rqrr found code {content:?}");
-                                let qr_img = draw_qr_code(&extracted);
-                                // qr_img.write_to(
-                                //     &mut std::fs::OpenOptions::new()
-                                //         .create(true)
-                                //         .write(true)
-                                //         .open(format!("/tmp/qr/{frame_id}.png"))
-                                //         .unwrap(),
-                                //     image::ImageFormat::Png,
-                                // )
-                                // .unwrap();
-                                let qr_img = qr_img.into_rgb8();
-                                dbg!(qr_img.width(), qr_img.height());
-                                let sixel_data = icy_sixel::sixel_string(
-                                    qr_img.as_raw(),
-                                    qr_img.width() as i32,
-                                    qr_img.height() as i32,
-                                    icy_sixel::PixelFormat::RGB888,
-                                    icy_sixel::DiffusionMethod::Auto, // Auto, None, Atkinson, FS, JaJuNi, Stucki, Burkes, ADither, XDither
-                                    icy_sixel::MethodForLargest::Auto, // Auto, Norm, Lum
-                                    icy_sixel::MethodForRep::Auto, // Auto, CenterBox, AverageColors, Pixels
-                                    icy_sixel::Quality::HIGH, // AUTO, HIGH, LOW, FULL, HIGHCOLOR
-                                )
-                                .expect("Failed to encode image to SIXEL format");
-                                eprintln!("{sixel_data}");
-
-                                return Some(content);
-                            }
-                            Err(err) => {
-                                eprintln!("[{frame_id}] rqrr can't decode qr code either: {err:?}");
-                            }
-                        };
-
-                        continue;
+                        eprintln!("[{frame_id}] rqrr can't decode qr code: {err:?}");
                     }
                 };
+
+                continue;
             }
         }
     }
