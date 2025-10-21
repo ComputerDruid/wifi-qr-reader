@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use bardecoder::{detect::Detect, extract::Extract, prepare::Prepare};
 use image::DynamicImage;
+use log::{debug, info, warn};
 
 #[allow(clippy::type_complexity, reason = "this is as clear as I can make it")]
 pub(crate) fn qr_decode_thread(
@@ -9,6 +10,7 @@ pub(crate) fn qr_decode_thread(
         i32,
         image::ImageBuffer<image::Rgba<u8>, Vec<u8>>,
     )>,
+    bar: indicatif::ProgressBar,
 ) -> String {
     {
         let mut decoding_time = Duration::ZERO;
@@ -16,16 +18,15 @@ pub(crate) fn qr_decode_thread(
         loop {
             let (frame_id, rgba_img) = next_image.recv();
             let bardecoder_start = Instant::now();
-            eprintln!("searching for barcode in frame {frame_id}");
             let decoded = qr_decode(frame_id, rgba_img);
             decoding_time += bardecoder_start.elapsed();
+            bar.set_position(frame_id.try_into().unwrap());
             if let Some(decoded) = decoded {
                 if decoded.starts_with("WIFI:") {
-                    dbg!(decoding_time);
-                    eprintln!("[{frame_id}] found code {decoded:?}");
+                    debug!("time spent decoding QR codes {decoding_time:?}");
                     return decoded;
                 } else {
-                    eprintln!("[{frame_id}] found non-wifi (or incorrect) QR code {decoded:?}");
+                    warn!("[{frame_id}] found non-wifi (or incorrect) QR code {decoded:?}")
                 }
             }
         }
@@ -49,7 +50,7 @@ fn qr_decode(frame_id: i32, image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>)
                 let extracted = match extract.extract(&prepared, qrloc) {
                     Ok(extracted) => extracted,
                     Err(err) => {
-                        eprintln!("[{frame_id}] bardecoder extract error {err:?}");
+                        warn!("[{frame_id}] bardecoder extract error: {err}");
                         continue;
                     }
                 };
@@ -61,7 +62,7 @@ fn qr_decode(frame_id: i32, image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>)
 
                 match grid.decode() {
                     Ok((_meta, content)) => {
-                        eprintln!("[{frame_id}] rqrr found code {content:?}");
+                        info!("[{frame_id}] rqrr found code {content:?}");
                         let qr_img = draw_qr_code(&extracted);
                         // qr_img.write_to(
                         //     &mut std::fs::OpenOptions::new()
@@ -73,7 +74,6 @@ fn qr_decode(frame_id: i32, image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>)
                         // )
                         // .unwrap();
                         let qr_img = qr_img.into_rgb8();
-                        dbg!(qr_img.width(), qr_img.height());
                         let sixel_data = icy_sixel::sixel_string(
                             qr_img.as_raw(),
                             qr_img.width() as i32,
@@ -85,12 +85,12 @@ fn qr_decode(frame_id: i32, image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>)
                             icy_sixel::Quality::HIGH,      // AUTO, HIGH, LOW, FULL, HIGHCOLOR
                         )
                         .expect("Failed to encode image to SIXEL format");
-                        eprintln!("{sixel_data}");
+                        info!("{sixel_data}");
 
                         return Some(content);
                     }
                     Err(err) => {
-                        eprintln!("[{frame_id}] rqrr can't decode qr code: {err:?}");
+                        warn!("[{frame_id}] rqrr can't decode qr code: {err:?}");
                     }
                 };
 

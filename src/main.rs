@@ -3,6 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use indicatif::{ProgressBar, ProgressStyle};
+use log::{debug, log_enabled};
 use nokhwa::{
     Camera,
     pixel_format::RgbAFormat,
@@ -14,6 +16,16 @@ mod mailslot;
 mod qrcode;
 
 fn main() {
+    let logger =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
+    let level = logger.filter();
+    let multi_progress = indicatif::MultiProgress::new();
+
+    indicatif_log_bridge::LogWrapper::new(multi_progress.clone(), logger)
+        .try_init()
+        .unwrap();
+    log::set_max_level(level);
+
     // first camera in system
     let index = CameraIndex::Index(0);
     // request the absolute highest resolution CameraFormat that can be decoded to RGB.
@@ -26,6 +38,12 @@ fn main() {
     let mut decode_time = Duration::ZERO;
     let mut sixel_time = Duration::ZERO;
 
+    let progress = multi_progress.add(
+        indicatif::ProgressBar::new_spinner()
+            .with_message("frames captured")
+            .with_style(ProgressStyle::with_template("{spinner} {pos} {msg}").unwrap()),
+    );
+
     for warmup_iter in 0..3 {
         let frame = camera.frame().unwrap();
         eprintln!(
@@ -35,9 +53,16 @@ fn main() {
     }
 
     let (next_image_for_qrcode_thread, image_receiver) = crate::mailslot::mailslot();
-    let qrcode_thread = std::thread::spawn(|| qrcode::qr_decode_thread(image_receiver));
+    let qrcode_thread = {
+        let qr_progress = multi_progress.add(
+            ProgressBar::new_spinner()
+                .with_message("last scanned")
+                .with_style(ProgressStyle::with_template("{spinner} {pos} {msg}").unwrap()),
+        );
+        std::thread::spawn(|| qrcode::qr_decode_thread(image_receiver, qr_progress))
+    };
 
-    for frame_id in 0.. {
+    for frame_id in 1.. {
         // sleep(Duration::from_secs(1));
         if qrcode_thread.is_finished() {
             break;
@@ -46,22 +71,23 @@ fn main() {
         // get a frame
         let capture_start = Instant::now();
         let frame = camera.frame().unwrap();
-        eprintln!("Captured Frame {frame_id} len {}", frame.buffer().len());
+        // eprintln!("Captured Frame {frame_id} len {}", frame.buffer().len());
         capture_time += capture_start.elapsed();
 
         // decode into an ImageBuffer
         let decode_start = Instant::now();
         let decoded = frame.decode_image::<RgbAFormat>().unwrap();
-        eprintln!("Decoded Frame {frame_id}");
+        // eprintln!("Decoded Frame {frame_id}");
         decode_time += decode_start.elapsed();
 
-        if frame_id % 10 == 5 {
+        if frame_id % 10 == 5 && log_enabled!(log::Level::Debug) {
             let sixel_start = Instant::now();
             let (width, height) = decoded.dimensions();
-            let img_rgba8888 = decoded.clone().into_raw();
+            let img_rgba8888 = decoded.as_raw();
             // Encode as SIXEL data
+
             let sixel_data = icy_sixel::sixel_string(
-                &img_rgba8888,
+                img_rgba8888,
                 width as i32,
                 height as i32,
                 icy_sixel::PixelFormat::RGBA8888,
@@ -71,13 +97,15 @@ fn main() {
                 icy_sixel::Quality::HIGH,         // AUTO, HIGH, LOW, FULL, HIGHCOLOR
             )
             .expect("Failed to encode image to SIXEL format");
-            eprintln!("{sixel_data}");
+            debug!("Capture preview:\n{sixel_data}");
             sixel_time += sixel_start.elapsed();
         }
+        progress.set_position(frame_id.try_into().unwrap());
 
         next_image_for_qrcode_thread.send_replace((frame_id, decoded));
     }
     let wifi_uri = qrcode_thread.join().unwrap();
+    progress.finish_and_clear();
     let connection = parse_wifi_uri(wifi_uri);
     let nmcli = connection.render_to_nmcli();
     println!("To connect, run:\n  {nmcli}");
@@ -140,12 +168,12 @@ fn parse_wifi_uri(wifi_uri: String) -> WifiConnection {
             panic!("duplicate key '{tag}:' in WIFI URI");
         }
     }
-    dbg!(&params);
+    debug!("WIFI URI params: {params:?}");
     if let Some(transition_disable) = params.remove(&WifiUriParamKey::TransitionDisable) {
-        if let Ok(transition_disable) = transition_disable.parse::<bool>()
-            && !transition_disable
+        if let Ok(transition_disable) = transition_disable.parse::<i32>()
+            && transition_disable == 0
         {
-            // false is normal, so nothing to do here.
+            // 0 is normal, so nothing to do here.
         } else {
             panic!("unsupported transition_disable flag: {transition_disable:?}");
         }
