@@ -50,7 +50,9 @@ fn qr_decode(frame_id: i32, image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>)
                 let extracted = match extract.extract(&prepared, qrloc) {
                     Ok(extracted) => extracted,
                     Err(err) => {
-                        warn!("[{frame_id}] bardecoder extract error: {err}");
+                        if err.msg != "Unable to find alignment pattern" {
+                            warn!("[{frame_id}] bardecoder extract error: {err}");
+                        }
                         continue;
                     }
                 };
