@@ -50,7 +50,9 @@ fn qr_decode(frame_id: i32, image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>)
                 let extracted = match extract.extract(&prepared, qrloc) {
                     Ok(extracted) => extracted,
                     Err(err) => {
-                        warn!("[{frame_id}] bardecoder extract error: {err}");
+                        if err.msg != "Unable to find alignment pattern" {
+                            warn!("[{frame_id}] bardecoder extract error: {err}");
+                        }
                         continue;
                     }
                 };
@@ -73,16 +75,12 @@ fn qr_decode(frame_id: i32, image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>)
                         //     image::ImageFormat::Png,
                         // )
                         // .unwrap();
-                        let qr_img = qr_img.into_rgb8();
-                        let sixel_data = icy_sixel::sixel_string(
+                        let qr_img = qr_img.into_rgba8();
+                        let sixel_data = icy_sixel::sixel_encode(
                             qr_img.as_raw(),
-                            qr_img.width() as i32,
-                            qr_img.height() as i32,
-                            icy_sixel::PixelFormat::RGB888,
-                            icy_sixel::DiffusionMethod::Auto, // Auto, None, Atkinson, FS, JaJuNi, Stucki, Burkes, ADither, XDither
-                            icy_sixel::MethodForLargest::Auto, // Auto, Norm, Lum
-                            icy_sixel::MethodForRep::Auto, // Auto, CenterBox, AverageColors, Pixels
-                            icy_sixel::Quality::HIGH,      // AUTO, HIGH, LOW, FULL, HIGHCOLOR
+                            qr_img.width() as usize,
+                            qr_img.height() as usize,
+                            &icy_sixel::EncodeOptions::default(),
                         )
                         .expect("Failed to encode image to SIXEL format");
                         info!("{sixel_data}");
