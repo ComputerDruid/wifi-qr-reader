@@ -86,15 +86,11 @@ fn main() {
             let img_rgba8888 = decoded.as_raw();
             // Encode as SIXEL data
 
-            let sixel_data = icy_sixel::sixel_string(
+            let sixel_data = icy_sixel::sixel_encode(
                 img_rgba8888,
-                width as i32,
-                height as i32,
-                icy_sixel::PixelFormat::RGBA8888,
-                icy_sixel::DiffusionMethod::Auto, // Auto, None, Atkinson, FS, JaJuNi, Stucki, Burkes, ADither, XDither
-                icy_sixel::MethodForLargest::Auto, // Auto, Norm, Lum
-                icy_sixel::MethodForRep::Auto,    // Auto, CenterBox, AverageColors, Pixels
-                icy_sixel::Quality::HIGH,         // AUTO, HIGH, LOW, FULL, HIGHCOLOR
+                width as usize,
+                height as usize,
+                &icy_sixel::EncodeOptions::default(),
             )
             .expect("Failed to encode image to SIXEL format");
             debug!("Capture preview:\n{sixel_data}");
